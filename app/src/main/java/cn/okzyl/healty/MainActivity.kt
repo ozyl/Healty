@@ -1,5 +1,6 @@
 package cn.okzyl.healty
 
+import android.app.Activity
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
@@ -10,6 +11,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.Button
 import android.widget.Toast
+import androidx.core.app.ActivityCompat.finishAffinity
 import androidx.lifecycle.lifecycleScope
 import cn.okzyl.healty.service.BaseAccessibilityService
 import cn.vove7.andro_accessibility_api.AccessibilityApi
@@ -19,22 +21,38 @@ import cn.vove7.andro_accessibility_api.utils.NeedAccessibilityException
 import cn.vove7.andro_accessibility_api.utils.jumpAccessibilityServiceSettings
 import cn.vove7.andro_accessibility_api.utils.whileWaitTime
 import cn.vove7.andro_accessibility_api.viewfinder.SF
+import cn.vove7.andro_accessibility_api.viewfinder.matchText
 import cn.vove7.andro_accessibility_api.viewfinder.text
 import kotlinx.coroutines.*
 import kotlin.concurrent.thread
 import kotlin.math.min
+import kotlin.system.exitProcess
 
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        start()
         findViewById<Button>(R.id.open).setOnClickListener {
+            start()
+        }
+        findViewById<Button>(R.id.openAli).setOnClickListener {
+            jumpMP()
+        }
+        act = this
+    }
+
+    override fun onDestroy() {
+        act = null
+        super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (AccessibilityApi.isBaseServiceEnable) {
             start()
         }
     }
 
-    var job :Job?=null
 
     private fun start() {
         job?.cancel()
@@ -42,59 +60,87 @@ class MainActivity : AppCompatActivity() {
             try {
                 waitAccessibility(180000, AccessibilityApi.BASE_SERVICE_CLS)
                 runOnUiThread {
-                    startActivity(Intent().apply {
-                        action = Intent.ACTION_VIEW
-                        data =
-                            Uri.parse("alipays://platformapi/startapp?appId=2021001135679870&page=pages/home/index")
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                    })
+                    jumpMP()
                 }
-                val isPage = waitForPage(AppScope("com.eg.android.AlipayGphone",
-                    "com.alipay.mobile.nebulax.integration.mpaas.activity.NebulaActivity\$Lite1"))
-
-                if (isPage) {
-                    run outside@{repeat(300) {
-                        if (SF.text("欢迎您").findFirst() != null) {
-                            AutoSceneUtil.moveTaskToFront(this@MainActivity)
-                            runOnUiThread {
-                                startActivity(Intent().apply {
-                                    action = Intent.ACTION_VIEW
-                                    data =
-                                        Uri.parse("alipays://platformapi/startapp?appId=2021001135679870&page=pages/codeScanning/index")
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                })
-                            }
-                            return@outside
-                        }
-                        delay(50)
-                    }}
-                }
-                delay(3000)
-                finish()
+                isOpen = true
+                tryOpen()
             } catch (e: Exception) {
                 e.printStackTrace()
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, "发生错误${e.message}", Toast.LENGTH_SHORT).show()
-                }
             }
 
         }
     }
-}
 
-object AutoSceneUtil {
+    companion object {
+        var isOpen = false
 
-    fun moveTaskToFront(context: Context) {
-        val activityManager =
-            context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        for (runningTaskInfo in activityManager.getRunningTasks(3)) {
-            if (context.packageName.equals(runningTaskInfo.topActivity?.packageName)) {
-                activityManager.moveTaskToFront(
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) runningTaskInfo.taskId else runningTaskInfo.id,
-                    ActivityManager.MOVE_TASK_WITH_HOME)
-                return
+        var job: Job? = null
+        var bossJob: Job? = null
+
+        var act: Activity? = null
+
+        var inCarm = false
+
+        fun tryOpen() {
+            inCarm = AccessibilityApi.currentScope?.pageName?.startsWith("com.alipay.mobile.scan.as.tool.ToolsCaptureActivity") == true
+            if (AccessibilityApi.currentScope?.pageName?.startsWith("com.alipay.mobile.nebulax.integration.mpaas.activity.NebulaActivity") == true && isOpen && bossJob?.isActive != true) {
+                bossJob?.cancel()
+                bossJob = CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        repeat(20) {
+                            if (!isOpen) return@launch
+                            openCarm()
+                            delay(300)
+                        }
+                        isOpen = false
+                    } catch (e: Exception) {
+                    }
+                }
             }
         }
+
+        suspend fun openCarm() {
+            val node = SF.matchText("本人信息扫码登记").findFirst() ?: return
+
+            val result = node.tryClick()
+            if (result) {
+                delay(1000)
+                if (inCarm){
+                    bossJob?.cancel()
+                    isOpen = false
+                    act?.finish()
+                }
+            }
+        }
+    }
+
+
+    object AutoSceneUtil {
+
+        fun moveTaskToFront(context: Context) {
+            val activityManager =
+                context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            for (runningTaskInfo in activityManager.getRunningTasks(3)) {
+                if (context.packageName.equals(runningTaskInfo.topActivity?.packageName)) {
+                    activityManager.moveTaskToFront(
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) runningTaskInfo.taskId else runningTaskInfo.id,
+                        ActivityManager.MOVE_TASK_WITH_HOME
+                    )
+                    return
+                }
+            }
+        }
+    }
+
+
+    private fun jumpMP() {
+        AutoSceneUtil.moveTaskToFront(this)
+        startActivity(Intent().apply {
+            action = Intent.ACTION_VIEW
+            data =
+                Uri.parse("alipays://platformapi/startapp?appId=2021001135679870&page=pages/home/index")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        })
     }
 }
 
